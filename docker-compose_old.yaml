@@ -1,0 +1,131 @@
+version: "3.5"
+
+services:
+  log01:
+    image: docker.elastic.co/logstash/logstash:${VERSION}
+    command: --config.reload.automatic 
+    environment:
+      LS_JAVA_OPTS: "-Xmx1g -Xms1g"
+    container_name: logstash
+    networks:
+      - shoup_net
+    volumes:
+      - ./data/logstash/logstash.conf:/etc/logstash/conf.d:ro
+      - ./data/logstash/logstash.conf:/usr/share/logstash/pipeline/test.conf:ro
+
+  #NON-XPACK version
+  # es01:
+  #   image: docker.elastic.co/elasticsearch/elasticsearch:${VERSION}
+  #   container_name: elasticsearch
+  #   environment:
+  #     - node.name=es01
+  #     - cluster.name=es-docker-cluster
+  #     #- discovery.seed_hosts=es02,es03
+  #     - cluster.initial_master_nodes=es01
+  #     - bootstrap.memory_lock=true
+  #     - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+  #   ulimits:
+  #     memlock:
+  #       soft: -1
+  #       hard: -1
+  #   volumes:
+  #     - elk_basic:/usr/share/elasticsearch/data
+  #   restart: always
+  #   ports:
+  #     - 9200:9200
+  #   networks:
+  #     - shoup_net
+
+  # kib01:
+  #   image: docker.elastic.co/kibana/kibana:${VERSION}
+  #   container_name: kibana
+  #   depends_on: ["es01"]
+  #   restart: always
+  #   ports:
+  #     - 5601:5601    
+  #   environment:
+  #     SERVERNAME: localhost
+  #     ELASTICSEARCH_URL: http://es01:9200
+  #     ELASTICSEARCH_HOSTS: http://es01:9200
+  #   networks:
+  #     - shoup_net  
+
+  #XPACK version
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${VERSION}
+    container_name: elasticsearch
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-cluster      
+      #- discovery.seed_hosts=es02,es03
+      - cluster.initial_master_nodes=es01
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"      
+      - xpack.license.self_generated.type=trial # <1>
+      - xpack.security.enabled=true      
+      - xpack.security.http.ssl.enabled=true # <2>
+      - xpack.security.http.ssl.key=$CERTS_DIR/es01/es01.key
+      - xpack.security.http.ssl.certificate_authorities=$CERTS_DIR/ca/ca.crt
+      - xpack.security.http.ssl.certificate=$CERTS_DIR/es01/es01.crt
+      - xpack.security.transport.ssl.enabled=true # <3>
+      - xpack.security.transport.ssl.verification_mode=certificate # <4>
+      - xpack.security.transport.ssl.certificate_authorities=$CERTS_DIR/ca/ca.crt
+      - xpack.security.transport.ssl.certificate=$CERTS_DIR/es01/es01.crt
+      - xpack.security.transport.ssl.key=$CERTS_DIR/es01/es01.key
+    healthcheck:
+      test: curl --cacert $CERTS_DIR/ca/ca.crt -s https://localhost:9200 >/dev/null; if [[ $$? == 52 ]]; then echo 0; else echo 1; fi
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes: 
+      - data01:/usr/share/elasticsearch/data
+      - ./certs:$CERTS_DIR
+    ports:
+      - 9200:9200
+    networks:
+      - shoup_net
+
+  kib01:
+    image: docker.elastic.co/kibana/kibana:${VERSION}
+    container_name: kibana
+    depends_on: ["es01"]
+    ports:
+      - 5601:5601    
+    environment:
+      SERVERNAME: localhost
+      ELASTICSEARCH_URL: https://es01:9200
+      ELASTICSEARCH_HOSTS: https://es01:9200
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: bmikG8vm5wh6zyAkV4Di
+      ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: $CERTS_DIR/ca/ca.crt
+      SERVER_SSL_ENABLED: "true"
+      SERVER_SSL_KEY: $CERTS_DIR/es01/es01.key
+      SERVER_SSL_CERTIFICATE: $CERTS_DIR/es01/es01.crt
+    volumes: 
+      - ./certs:$CERTS_DIR
+    networks:
+      - shoup_net  
+
+  filebeat:
+    user: root
+    image: docker.elastic.co/beats/filebeat:${VERSION}
+    environment:
+      - setup.kibana.host=https://kibana:5601
+      - output.elasticsearch.hosts=["http://elasticsearch:9200"]
+    networks:
+      - shoup_net
+
+  metricbeat:
+    user: root
+    image: docker.elastic.co/beats/metricbeat:${VERSION}
+    environment:
+      - setup.kibana.host=https://kibana:5601
+      - output.elasticsearch.hosts=["http://elasticsearch:9200"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - shoup_net
